@@ -13,7 +13,7 @@ import os
 import secrets
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
@@ -171,6 +171,18 @@ def _ensure_bootstrap_tokens(env: dict[str, str] | None = None) -> tuple[Path | 
         os.chmod(token_json_path, 0o600)
 
     return token_json_path, source
+
+
+def _default_oauth_clients_store_path() -> Path:
+    """Default location for the persisted OAuth client registry.
+
+    Reuses the same directory as the Garmin token store (already a mounted
+    volume in typical deployments) so registered MCP clients survive
+    container restarts/redeploys instead of forcing every connected client
+    to redo the OAuth dance.
+    """
+    token_dir = Path(os.path.expanduser(os.getenv("GARMINTOKENS") or "~/.garminconnect"))
+    return Path(os.getenv("OAUTH_CLIENTS_STORE") or (token_dir / "oauth_clients.json"))
 
 
 def _oauth_error_response(
@@ -442,13 +454,52 @@ SessionFactory = Callable[[str], Awaitable[StdioMcpSession]]
 
 
 class OAuthMcpBridge:
-    def __init__(self, base_url: str, session_factory: SessionFactory | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        session_factory: SessionFactory | None = None,
+        clients_store_path: Path | None = None,
+    ) -> None:
         self.base_url = _normalize_base_url(base_url)
         self.session_factory = session_factory or StdioMcpSession.create
-        self.clients: dict[str, ClientRegistration] = {}
+        self.clients_store_path = clients_store_path or _default_oauth_clients_store_path()
+        self.clients: dict[str, ClientRegistration] = self._load_clients()
         self.authorization_codes: dict[str, AuthorizationCodeRecord] = {}
         self.access_tokens: dict[str, AccessTokenRecord] = {}
         self.sessions: dict[str, StdioMcpSession] = {}
+
+    def _load_clients(self) -> dict[str, ClientRegistration]:
+        if not self.clients_store_path.exists():
+            return {}
+        try:
+            raw = json.loads(self.clients_store_path.read_text(encoding="utf-8"))
+            return {
+                client_id: ClientRegistration(**fields)
+                for client_id, fields in raw.items()
+            }
+        except (OSError, ValueError, TypeError) as exc:
+            print(
+                f"Warning: could not load persisted OAuth clients from "
+                f"{self.clients_store_path}: {exc}",
+                file=sys.stderr,
+            )
+            return {}
+
+    def persist_clients(self) -> None:
+        try:
+            self.clients_store_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                client_id: asdict(client) for client_id, client in self.clients.items()
+            }
+            self.clients_store_path.write_text(json.dumps(payload), encoding="utf-8")
+            with contextlib.suppress(PermissionError, OSError):
+                os.chmod(self.clients_store_path, 0o600)
+        except OSError as exc:
+            print(
+                f"Warning: could not persist OAuth clients to "
+                f"{self.clients_store_path}: {exc}",
+                file=sys.stderr,
+            )
 
     def prune_expired(self) -> None:
         now = _now()
@@ -651,6 +702,7 @@ def create_app(
             client_secret_expires_at=0 if client_secret else 0,
         )
         bridge.clients[client_id] = client
+        bridge.persist_clients()
 
         response: dict[str, Any] = {
             "client_id": client.client_id,
