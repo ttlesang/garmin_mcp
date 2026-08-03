@@ -24,7 +24,13 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 
 
 AUTH_CODE_TTL_SECONDS = 300
-ACCESS_TOKEN_TTL_SECONDS = 3600
+ACCESS_TOKEN_TTL_SECONDS = int(os.getenv("GARMIN_MCP_ACCESS_TOKEN_TTL", "3600"))
+REFRESH_TOKEN_TTL_SECONDS = int(os.getenv("GARMIN_MCP_REFRESH_TOKEN_TTL", str(30 * 24 * 3600)))
+# Each MCP session runs its own stdio subprocess (~50-100 MB); without a cap and
+# an idle reaper, abandoned sessions accumulate until the host runs out of memory.
+SESSION_IDLE_TTL_SECONDS = int(os.getenv("GARMIN_MCP_SESSION_IDLE_TTL", "900"))
+SESSION_REAP_INTERVAL_SECONDS = int(os.getenv("GARMIN_MCP_SESSION_REAP_INTERVAL", "60"))
+MAX_SESSIONS = int(os.getenv("GARMIN_MCP_MAX_SESSIONS", "8"))
 SUPPORTED_TOKEN_AUTH_METHODS = {"none", "client_secret_post", "client_secret_basic"}
 SUPPORTED_CODE_CHALLENGE_METHODS = {"S256"}
 SESSION_HEADER = "MCP-Session-Id"
@@ -60,6 +66,15 @@ class AuthorizationCodeRecord:
 
 @dataclass
 class AccessTokenRecord:
+    token: str
+    client_id: str
+    resource: str
+    scope: str
+    expires_at: int
+
+
+@dataclass
+class RefreshTokenRecord:
     token: str
     client_id: str
     resource: str
@@ -183,6 +198,18 @@ def _default_oauth_clients_store_path() -> Path:
     """
     token_dir = Path(os.path.expanduser(os.getenv("GARMINTOKENS") or "~/.garminconnect"))
     return Path(os.getenv("OAUTH_CLIENTS_STORE") or (token_dir / "oauth_clients.json"))
+
+
+def _default_oauth_tokens_store_path() -> Path:
+    """Default location for persisted OAuth access/refresh tokens.
+
+    Lives next to the client registry on the mounted token volume so issued
+    tokens survive container restarts/redeploys; otherwise every restart
+    invalidates all bearer tokens and connected clients are forced through
+    an interactive re-authorization.
+    """
+    token_dir = Path(os.path.expanduser(os.getenv("GARMINTOKENS") or "~/.garminconnect"))
+    return Path(os.getenv("OAUTH_TOKENS_STORE") or (token_dir / "oauth_tokens.json"))
 
 
 def _oauth_error_response(
@@ -327,6 +354,10 @@ class StdioMcpSession:
         )
         return cls(session_id, process)
 
+    @property
+    def is_dead(self) -> bool:
+        return self._closed or self.process.returncode is not None
+
     def subscribe(self) -> asyncio.Queue[tuple[int, dict[str, Any]] | None]:
         queue: asyncio.Queue[tuple[int, dict[str, Any]] | None] = asyncio.Queue()
         self._listeners.add(queue)
@@ -459,14 +490,19 @@ class OAuthMcpBridge:
         base_url: str,
         session_factory: SessionFactory | None = None,
         clients_store_path: Path | None = None,
+        tokens_store_path: Path | None = None,
     ) -> None:
         self.base_url = _normalize_base_url(base_url)
         self.session_factory = session_factory or StdioMcpSession.create
         self.clients_store_path = clients_store_path or _default_oauth_clients_store_path()
+        self.tokens_store_path = tokens_store_path or _default_oauth_tokens_store_path()
         self.clients: dict[str, ClientRegistration] = self._load_clients()
         self.authorization_codes: dict[str, AuthorizationCodeRecord] = {}
         self.access_tokens: dict[str, AccessTokenRecord] = {}
+        self.refresh_tokens: dict[str, RefreshTokenRecord] = {}
+        self._load_tokens()
         self.sessions: dict[str, StdioMcpSession] = {}
+        self.session_last_used: dict[str, float] = {}
 
     def _load_clients(self) -> dict[str, ClientRegistration]:
         if not self.clients_store_path.exists():
@@ -501,6 +537,49 @@ class OAuthMcpBridge:
                 file=sys.stderr,
             )
 
+    def _load_tokens(self) -> None:
+        if not self.tokens_store_path.exists():
+            return
+        try:
+            raw = json.loads(self.tokens_store_path.read_text(encoding="utf-8"))
+            self.access_tokens = {
+                token: AccessTokenRecord(**fields)
+                for token, fields in raw.get("access_tokens", {}).items()
+            }
+            self.refresh_tokens = {
+                token: RefreshTokenRecord(**fields)
+                for token, fields in raw.get("refresh_tokens", {}).items()
+            }
+        except (OSError, ValueError, TypeError) as exc:
+            print(
+                f"Warning: could not load persisted OAuth tokens from "
+                f"{self.tokens_store_path}: {exc}",
+                file=sys.stderr,
+            )
+            self.access_tokens = {}
+            self.refresh_tokens = {}
+
+    def persist_tokens(self) -> None:
+        try:
+            self.tokens_store_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "access_tokens": {
+                    token: asdict(record) for token, record in self.access_tokens.items()
+                },
+                "refresh_tokens": {
+                    token: asdict(record) for token, record in self.refresh_tokens.items()
+                },
+            }
+            self.tokens_store_path.write_text(json.dumps(payload), encoding="utf-8")
+            with contextlib.suppress(PermissionError, OSError):
+                os.chmod(self.tokens_store_path, 0o600)
+        except OSError as exc:
+            print(
+                f"Warning: could not persist OAuth tokens to "
+                f"{self.tokens_store_path}: {exc}",
+                file=sys.stderr,
+            )
+
     def prune_expired(self) -> None:
         now = _now()
         self.authorization_codes = {
@@ -508,11 +587,23 @@ class OAuthMcpBridge:
             for code, record in self.authorization_codes.items()
             if record.expires_at > now
         }
-        self.access_tokens = {
+        live_access = {
             token: record
             for token, record in self.access_tokens.items()
             if record.expires_at > now
         }
+        live_refresh = {
+            token: record
+            for token, record in self.refresh_tokens.items()
+            if record.expires_at > now
+        }
+        tokens_changed = len(live_access) != len(self.access_tokens) or len(
+            live_refresh
+        ) != len(self.refresh_tokens)
+        self.access_tokens = live_access
+        self.refresh_tokens = live_refresh
+        if tokens_changed:
+            self.persist_tokens()
 
     def validate_resource(self, resource: str | None) -> str:
         if not resource:
@@ -524,9 +615,21 @@ class OAuthMcpBridge:
         return normalized
 
     async def create_session(self) -> StdioMcpSession:
+        await self.reap_sessions()
+
+        # Hard cap: evict the least-recently-used sessions rather than letting
+        # subprocesses accumulate without bound.
+        while len(self.sessions) >= MAX_SESSIONS:
+            oldest_id = min(
+                self.sessions,
+                key=lambda sid: self.session_last_used.get(sid, 0.0),
+            )
+            await self.drop_session(oldest_id)
+
         session_id = secrets.token_urlsafe(24)
         session = await self.session_factory(session_id)
         self.sessions[session_id] = session
+        self.session_last_used[session_id] = time.monotonic()
         return session
 
     def get_session(self, session_id: str | None) -> StdioMcpSession:
@@ -536,12 +639,29 @@ class OAuthMcpBridge:
         session = self.sessions.get(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Unknown MCP session")
+
+        if getattr(session, "is_dead", False):
+            self.sessions.pop(session_id, None)
+            self.session_last_used.pop(session_id, None)
+            asyncio.get_running_loop().create_task(session.close())
+            raise HTTPException(status_code=404, detail="MCP session has terminated")
+
+        self.session_last_used[session_id] = time.monotonic()
         return session
 
     async def drop_session(self, session_id: str) -> None:
         session = self.sessions.pop(session_id, None)
+        self.session_last_used.pop(session_id, None)
         if session is not None:
             await session.close()
+
+    async def reap_sessions(self, idle_ttl: float = SESSION_IDLE_TTL_SECONDS) -> None:
+        """Drop dead subprocesses and sessions with no recent traffic."""
+        now = time.monotonic()
+        for session_id, session in list(self.sessions.items()):
+            last_used = self.session_last_used.get(session_id, now)
+            if getattr(session, "is_dead", False) or now - last_used > idle_ttl:
+                await self.drop_session(session_id)
 
     async def shutdown(self) -> None:
         for session_id in list(self.sessions):
@@ -618,13 +738,35 @@ def create_app(
     *,
     base_url: str,
     session_factory: SessionFactory | None = None,
+    clients_store_path: Path | None = None,
+    tokens_store_path: Path | None = None,
 ) -> FastAPI:
-    bridge = OAuthMcpBridge(base_url, session_factory=session_factory)
+    bridge = OAuthMcpBridge(
+        base_url,
+        session_factory=session_factory,
+        clients_store_path=clients_store_path,
+        tokens_store_path=tokens_store_path,
+    )
     app = FastAPI(title="Garmin MCP HTTP Bridge")
     app.state.bridge = bridge
 
+    @app.on_event("startup")
+    async def _start_session_reaper() -> None:
+        async def _reap_loop() -> None:
+            while True:
+                await asyncio.sleep(SESSION_REAP_INTERVAL_SECONDS)
+                with contextlib.suppress(Exception):
+                    await bridge.reap_sessions()
+
+        app.state.session_reaper = asyncio.create_task(_reap_loop())
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
+        reaper = getattr(app.state, "session_reaper", None)
+        if reaper is not None:
+            reaper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reaper
         await bridge.shutdown()
 
     @app.get("/health")
@@ -653,7 +795,7 @@ def create_app(
             "token_endpoint": _make_url(bridge.base_url, "/oauth/token"),
             "registration_endpoint": _make_url(bridge.base_url, "/oauth/register"),
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
             "token_endpoint_auth_methods_supported": sorted(SUPPORTED_TOKEN_AUTH_METHODS),
             "code_challenge_methods_supported": sorted(SUPPORTED_CODE_CHALLENGE_METHODS),
             "scopes_supported": ["mcp"],
@@ -786,15 +928,49 @@ def create_app(
             status_code=302,
         )
 
+    def _issue_tokens(client_id: str, resource: str, scope: str) -> JSONResponse:
+        access_token = secrets.token_urlsafe(32)
+        bridge.access_tokens[access_token] = AccessTokenRecord(
+            token=access_token,
+            client_id=client_id,
+            resource=resource,
+            scope=scope,
+            expires_at=_now() + ACCESS_TOKEN_TTL_SECONDS,
+        )
+        refresh_token = secrets.token_urlsafe(32)
+        bridge.refresh_tokens[refresh_token] = RefreshTokenRecord(
+            token=refresh_token,
+            client_id=client_id,
+            resource=resource,
+            scope=scope,
+            expires_at=_now() + REFRESH_TOKEN_TTL_SECONDS,
+        )
+        bridge.persist_tokens()
+
+        return JSONResponse(
+            {
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "expires_in": ACCESS_TOKEN_TTL_SECONDS,
+                "refresh_token": refresh_token,
+                "scope": scope,
+                "resource": resource,
+            }
+        )
+
     @app.post("/oauth/token")
     async def oauth_token(request: Request) -> JSONResponse:
         bridge.prune_expired()
         form = await _read_form_body(request)
 
-        if form.get("grant_type") != "authorization_code":
+        grant_type = form.get("grant_type")
+        if grant_type == "refresh_token":
+            return _handle_refresh_token_grant(request, form)
+
+        if grant_type != "authorization_code":
             return _oauth_error_response(
                 "unsupported_grant_type",
-                description="Only the authorization_code grant is supported",
+                description="Only the authorization_code and refresh_token grants are supported",
                 status_code=400,
             )
 
@@ -868,25 +1044,65 @@ def create_app(
                 status_code=400,
             )
 
-        access_token = secrets.token_urlsafe(32)
-        bridge.access_tokens[access_token] = AccessTokenRecord(
-            token=access_token,
-            client_id=client.client_id,
-            resource=record.resource,
-            scope=record.scope,
-            expires_at=_now() + ACCESS_TOKEN_TTL_SECONDS,
-        )
         bridge.authorization_codes.pop(code, None)
+        return _issue_tokens(client.client_id, record.resource, record.scope)
 
-        return JSONResponse(
-            {
-                "access_token": access_token,
-                "token_type": "Bearer",
-                "expires_in": ACCESS_TOKEN_TTL_SECONDS,
-                "scope": record.scope,
-                "resource": record.resource,
-            }
-        )
+    def _handle_refresh_token_grant(
+        request: Request, form: dict[str, str]
+    ) -> JSONResponse:
+        client_id = form.get("client_id")
+        refresh_token = form.get("refresh_token")
+
+        if not client_id or not refresh_token:
+            return _oauth_error_response(
+                "invalid_request",
+                description="client_id and refresh_token are required",
+                status_code=400,
+            )
+
+        client = bridge.clients.get(client_id)
+        if client is None:
+            return _oauth_error_response(
+                "invalid_client",
+                description="Unknown client_id",
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="garmin-mcp"'},
+            )
+
+        if not _validate_client_auth(client, form, request.headers.get("Authorization")):
+            return _oauth_error_response(
+                "invalid_client",
+                description="Client authentication failed",
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="garmin-mcp"'},
+            )
+
+        record = bridge.refresh_tokens.get(refresh_token)
+        if record is None or record.client_id != client.client_id:
+            return _oauth_error_response(
+                "invalid_grant",
+                description="Refresh token is invalid or expired",
+                status_code=400,
+            )
+
+        try:
+            requested_resource = bridge.validate_resource(form.get("resource"))
+        except HTTPException as exc:
+            return _oauth_error_response(
+                "invalid_target",
+                description=str(exc.detail),
+                status_code=400,
+            )
+        if requested_resource != record.resource:
+            return _oauth_error_response(
+                "invalid_target",
+                description="Token resource does not match refresh token",
+                status_code=400,
+            )
+
+        # Rotate: the used refresh token is single-use.
+        bridge.refresh_tokens.pop(refresh_token, None)
+        return _issue_tokens(client.client_id, record.resource, record.scope)
 
     @app.post("/sse")
     async def sse_post(request: Request) -> Response:
@@ -920,6 +1136,15 @@ def create_app(
             if is_initialize:
                 await bridge.drop_session(session.session_id)
             raise
+
+    @app.delete("/sse")
+    async def sse_delete(request: Request) -> Response:
+        _require_access_token(request)
+        session_id = request.headers.get(SESSION_HEADER)
+        if not session_id:
+            raise HTTPException(status_code=400, detail=f"{SESSION_HEADER} header is required")
+        await bridge.drop_session(session_id)
+        return Response(status_code=204)
 
     @app.get("/sse")
     async def sse_get(request: Request) -> StreamingResponse:
