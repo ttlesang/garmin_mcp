@@ -452,6 +452,7 @@ class TestAuthenticateIsCn:
         )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
 class TestSecureTokenDir:
     """Tests for _secure_token_dir: verifies owner-only permissions are applied."""
 

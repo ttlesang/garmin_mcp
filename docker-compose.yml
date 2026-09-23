@@ -1,42 +1,48 @@
+# Remote deployment of the Garmin MCP HTTP/OAuth bridge (garmin-mcp-http).
+#
+# The container publishes no port. It joins the Docker network shared with a
+# TLS reverse proxy running as a container (here Caddy on the "edge" network),
+# which reaches it as garmin-mcp:3000. Caddyfile entry:
+#
+#   mcp-garmin.example.com {
+#       reverse_proxy garmin-mcp:3000
+#   }
+#
+# 1. docker network create edge        (once; skip if the proxy already made it)
+# 2. cp .env.example .env               and fill in the values
+# 3. docker compose up -d --build
 services:
   garmin-mcp:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: garmin-mcp-server
-
-    # Option 1: Use environment variables directly
-    environment:
-      - GARMIN_EMAIL=${GARMIN_EMAIL}
-      - GARMIN_PASSWORD=${GARMIN_PASSWORD}
-      # - GARMIN_IS_CN=true  # Uncomment to use Garmin Connect China (garmin.cn)
-
-    # Option 2: Use file-based secrets (uncomment to use)
-    # environment:
-    #   - GARMIN_EMAIL_FILE=/run/secrets/garmin_email
-    #   - GARMIN_PASSWORD_FILE=/run/secrets/garmin_password
-    # secrets:
-    #   - garmin_email
-    #   - garmin_password
-
-    # Mount volume to persist Garmin OAuth tokens
-    volumes:
-      - garmin-tokens:/root/.garminconnect
-
-    # Restart policy
+    container_name: garmin-mcp
     restart: unless-stopped
 
-    # Optional: Set stdin_open and tty for interactive MFA input
-    stdin_open: true
-    tty: true
+    # BASE_URL, GARMIN_MCP_ADMIN_PASSWORD, Garmin credentials/tokens...
+    # Keep this file dedicated to this service: every variable in it is
+    # visible to the container.
+    env_file: .env
+    environment:
+      - PORT=3000
+
+    # Reachable only by containers on the same network (the reverse proxy).
+    expose:
+      - "3000"
+    networks:
+      - edge
+
+    # Garmin tokens (refreshed in place) and the OAuth client/token stores.
+    volumes:
+      - garmin_mcp_tokens:/root/.garminconnect
+
+    # Each MCP session is a ~50-100 MB subprocess (capped by
+    # GARMIN_MCP_MAX_SESSIONS): keep a runaway from taking the host down.
+    mem_limit: 1g
 
 volumes:
-  garmin-tokens:
-    driver: local
+  garmin_mcp_tokens:
 
-# Uncomment if using file-based secrets
-# secrets:
-#   garmin_email:
-#     file: ./secrets/garmin_email.txt
-#   garmin_password:
-#     file: ./secrets/garmin_password.txt
+networks:
+  edge:
+    external: true

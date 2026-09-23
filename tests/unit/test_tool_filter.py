@@ -1,6 +1,6 @@
 """Unit tests for the env-var tool filter (_ToolFilter)."""
 
-from garmin_mcp import _ToolFilter
+from garmin_mcp import LOCAL_FILE_TOOLS, _ToolFilter
 
 
 class FakeApp:
@@ -93,3 +93,12 @@ def test_passthrough_to_wrapped_app():
     app = FakeApp()
     filt = _ToolFilter(app, set(), set())
     assert filt.run() == "ran"
+
+
+def test_blocked_tools_win_over_allowlist():
+    app = FakeApp()
+    filt = _ToolFilter(app, {"get_a", "download_activity_file"}, set(), blocked=LOCAL_FILE_TOOLS)
+    _register(filt, ["get_a", "download_activity_file", "upload_course"])
+    assert app.registered == ["get_a"]
+    # Blocked tools exist, so they must not be reported as filter typos.
+    assert filt.unknown_filter_names() == []

@@ -102,6 +102,14 @@ def _parse_tool_set(value):
 enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
 disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
 
+# Tools that read or write the server's own filesystem. Useful locally, but for
+# a remote client they only touch the host (arbitrary paths, as the server's
+# user), so the HTTP bridge sets GARMIN_MCP_DISABLE_LOCAL_FILE_TOOLS for them.
+LOCAL_FILE_TOOLS = {"download_activity_file", "set_fit_download_dir", "upload_course"}
+local_file_tools_disabled = os.getenv(
+    "GARMIN_MCP_DISABLE_LOCAL_FILE_TOOLS", "false"
+).lower() in ("true", "1", "yes")
+
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 
@@ -169,14 +177,17 @@ class _ToolFilter:
     attribute access (``run``, ``resource``, ...) passes through to the app.
     """
 
-    def __init__(self, app, enabled, disabled):
+    def __init__(self, app, enabled, disabled, blocked=frozenset()):
         self._app = app
         self._enabled = enabled
         self._disabled = disabled
+        self._blocked = blocked  # never registered, even if allowlisted
         self._seen = set()  # tool names encountered, for typo detection
 
     def _allowed(self, name):
         name = name.lower()
+        if name in self._blocked:
+            return False
         if self._enabled:
             return name in self._enabled
         return name not in self._disabled
@@ -218,14 +229,6 @@ def init_api(email, password):
             f"Trying to login to Garmin Connect using token data from directory '{tokenstore}'...\n",
             file=sys.stderr,
         )
-
-        # Using Oauth1 and Oauth2 tokens from base64 encoded string
-        # print(
-        #     f"Trying to login to Garmin Connect using token data from file '{tokenstore_base64}'...\n"
-        # )
-        # dir_path = os.path.expanduser(tokenstore_base64)
-        # with open(dir_path, "r") as token_file:
-        #     tokenstore = token_file.read()
 
         # Suppress stderr for token validation to avoid confusing library errors
         old_stderr = sys.stderr
@@ -386,7 +389,17 @@ def main():
     # Create the MCP app, wrapped so the env-var filter can drop tools.
     # host/port only matter for the HTTP transports; stdio ignores them.
     fastmcp = FastMCP("Garmin Connect v1.0", host=http_host, port=http_port)
-    app = _ToolFilter(fastmcp, enabled_tools, disabled_tools)
+    app = _ToolFilter(
+        fastmcp,
+        enabled_tools,
+        disabled_tools,
+        blocked=LOCAL_FILE_TOOLS if local_file_tools_disabled else frozenset(),
+    )
+    if local_file_tools_disabled:
+        print(
+            f"Local file tools disabled: {', '.join(sorted(LOCAL_FILE_TOOLS))}.",
+            file=sys.stderr,
+        )
     if enabled_tools:
         print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
     elif disabled_tools:
