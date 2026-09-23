@@ -25,10 +25,6 @@ COPY src/ ./src/
 # Install dependencies using uv
 RUN uv pip install -e .
 
-# Copy test files (optional, for testing in container)
-COPY tests/ ./tests/
-COPY pytest.ini ./
-
 # Create directory for Garmin tokens
 RUN mkdir -p /root/.garminconnect && \
     chmod 700 /root/.garminconnect
@@ -39,6 +35,5 @@ EXPOSE ${PORT}
 # Set the entrypoint to run the HTTP wrapper
 ENTRYPOINT ["garmin-mcp-http"]
 
-# Health check (optional - adjust based on your needs)
-# HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-#   CMD python -c "import sys; sys.exit(0)"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '3000'), timeout=3)"

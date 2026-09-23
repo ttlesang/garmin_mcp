@@ -409,7 +409,44 @@ When an HTTP transport is selected:
 - MCP clients connect to the **`/mcp`** path (e.g. `http://localhost:8000/mcp`).
 - A plain **`GET /healthz`** endpoint is exposed for liveness/readiness probes.
 
-The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
+This built-in HTTP transport performs **no authentication** — only use it on localhost or behind an authenticating reverse proxy. To expose the server on the internet (e.g. as a Claude custom connector), use the OAuth bridge below instead.
+
+### Remote deployment with OAuth (`garmin-mcp-http`)
+
+`garmin-mcp-http` serves the MCP server over HTTP at `/sse` behind an OAuth 2.1 authorization server (dynamic client registration, PKCE, refresh tokens), which is what claude.ai custom connectors expect. Each MCP session runs in its own stdio subprocess.
+
+Connecting a client opens an authorization page that asks for the **server password** (`GARMIN_MCP_ADMIN_PASSWORD`); without it no token is ever issued. Repeated wrong passwords lock the page for 15 minutes.
+
+The provided `docker-compose.yml` publishes no port: the container joins an external Docker network (`edge`) shared with a reverse proxy container that terminates TLS, e.g. Caddy with:
+
+```
+mcp-garmin.example.com {
+    reverse_proxy garmin-mcp:3000
+}
+```
+
+```bash
+docker network create edge    # once, if your proxy did not create it
+cp .env.example .env          # set BASE_URL, GARMIN_MCP_ADMIN_PASSWORD and Garmin login
+docker compose up -d --build
+```
+
+Then add `https://<your-domain>/sse` as a custom connector in Claude.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BASE_URL` | `http://127.0.0.1:$PORT` | Public URL of the server (OAuth issuer and resource) |
+| `GARMIN_MCP_ADMIN_PASSWORD` | — (required, ≥ 12 chars) | Password asked on the authorization page |
+| `GARMIN_TOKENS_JSON_BASE64` | — | Base64 of `garmin_tokens.json`; seeds the token volume once, refreshed tokens are kept |
+| `PORT` / `GARMIN_MCP_HOST` | `3000` / `0.0.0.0` | Listen address |
+| `GARMIN_MCP_MAX_SESSIONS` | `8` | Concurrent sessions (LRU eviction) |
+| `GARMIN_MCP_SESSION_IDLE_TTL` | `900` | Seconds before an idle session is reaped |
+| `GARMIN_MCP_REQUEST_TIMEOUT` | `300` | Max seconds for one tool call |
+| `GARMIN_MCP_ACCESS_TOKEN_TTL` / `GARMIN_MCP_REFRESH_TOKEN_TTL` | `3600` / `2592000` | OAuth token lifetimes |
+| `GARMIN_MCP_MAX_CLIENTS` | `50` | Registered OAuth clients kept (oldest evicted) |
+| `GARMIN_MCP_DISABLE_LOCAL_FILE_TOOLS` | `true` in this mode | Hides `download_activity_file`, `set_fit_download_dir` and `upload_course`, which would read/write the server's disk |
+
+OAuth tokens and client secrets are stored hashed (SHA-256) next to the Garmin tokens on the volume.
 
 ### Garmin Connect China (garmin.cn)
 
@@ -560,30 +597,6 @@ Restart your MCP client after saving the file.
 
 ### With opencode
 
-[opencode](https://opencode.ai) auto-loads a project-level `opencode.json` when launched from a repository root, so contributors who clone this repo get the Garmin MCP wired up against the local source with no extra config.
-
-#### From a clone of this repository (recommended for development)
-
-This repo ships an [`opencode.json`](./opencode.json) that runs the MCP via `uv run garmin-mcp`, so it always tracks the working tree.
-
-```bash
-git clone https://github.com/Taxuspt/garmin_mcp.git
-cd garmin_mcp
-uv sync                # install dependencies
-garmin-mcp-auth        # one-time Garmin login (skip if ~/.garminconnect already exists)
-opencode               # launches with the garmin MCP attached
-```
-
-Verify the server is connected:
-
-```bash
-opencode mcp list
-# ●  ✓ garmin   connected
-#       uv run garmin-mcp
-```
-
-#### From any other directory (GitHub install)
-
 Add the server to your global opencode config at `~/.config/opencode/opencode.json` after running `garmin-mcp-auth`:
 
 ```json
@@ -611,125 +624,11 @@ Restart opencode after saving the file. The first `uvx` invocation downloads and
 
 ### With Docker
 
-Docker provides an isolated and consistent environment for running the MCP server.
+The Docker image runs the remote OAuth bridge (`garmin-mcp-http`); see [Remote deployment with OAuth](#remote-deployment-with-oauth-garmin-mcp-http) for the `docker compose` setup.
 
-#### Quick Start with Docker Compose (Recommended)
+Garmin tokens live in the `garmin-tokens` volume. To force a fresh login, update `GARMIN_TOKENS_JSON_BASE64` in `.env` (a changed value re-seeds the volume) and run `docker compose up -d`.
 
-1. Create a `.env` file with your credentials:
-
-```bash
-echo "GARMIN_EMAIL=your_email@example.com" > .env
-echo "GARMIN_PASSWORD=your_password" >> .env
-```
-
-2. Start the container:
-
-```bash
-docker compose up -d
-```
-
-3. View logs to monitor the server:
-
-```bash
-docker compose logs -f garmin-mcp
-```
-
-#### Using Docker Directly
-
-```bash
-# Build the image
-docker build -t garmin-mcp .
-
-# Run the container
-docker run -it \
-  -e GARMIN_EMAIL="your_email@example.com" \
-  -e GARMIN_PASSWORD="your_password" \
-  -v garmin-tokens:/root/.garminconnect \
-  garmin-mcp
-```
-
-#### Using File-Based Secrets (More Secure)
-
-For enhanced security, especially in production environments, use file-based secrets instead of environment variables:
-
-1. Create a secrets directory and add your credentials:
-
-```bash
-mkdir -p secrets
-echo "your_email@example.com" > secrets/garmin_email.txt
-echo "your_password" > secrets/garmin_password.txt
-chmod 600 secrets/*.txt
-```
-
-2. Edit [docker-compose.yml](docker-compose.yml) and uncomment the secrets section:
-
-```yaml
-services:
-  garmin-mcp:
-    environment:
-      - GARMIN_EMAIL_FILE=/run/secrets/garmin_email
-      - GARMIN_PASSWORD_FILE=/run/secrets/garmin_password
-    secrets:
-      - garmin_email
-      - garmin_password
-
-secrets:
-  garmin_email:
-    file: ./secrets/garmin_email.txt
-  garmin_password:
-    file: ./secrets/garmin_password.txt
-```
-
-3. Start the container:
-
-```bash
-docker compose up -d
-```
-
-#### Handling MFA with Docker
-
-If you have multi-factor authentication (MFA) enabled on your Garmin account:
-
-1. Run the container in interactive mode:
-
-```bash
-docker compose run --rm garmin-mcp
-```
-
-2. When prompted, enter your MFA code:
-
-```
-Garmin Connect MFA required. Please check your email/phone for the code.
-Enter MFA code: 123456
-```
-
-3. The OAuth tokens will be saved to the Docker volume (`garmin-tokens`), so you won't need to re-authenticate on subsequent runs.
-
-4. After MFA setup, you can run the container normally:
-
-```bash
-docker compose up -d
-```
-
-#### Docker Volume Management
-
-The OAuth tokens are stored in a persistent Docker volume to avoid re-authentication:
-
-```bash
-# List volumes
-docker volume ls
-
-# Inspect the tokens volume
-docker volume inspect garmin_mcp_garmin-tokens
-
-# Remove the volume (will require re-authentication)
-docker volume rm garmin_mcp_garmin-tokens
-```
-
-#### Using with Claude Desktop via Docker
-
-To use the Dockerized MCP server with Claude Desktop, you can configure it to communicate with the container. However, note that MCP servers typically communicate via stdio, which works best with direct process execution. For Docker-based deployments, consider using the standard `uvx` method shown in the [With Claude Desktop](#with-claude-desktop) section instead.
-
+For a local client such as Claude Desktop, prefer the stdio setup in [With Claude Desktop](#with-claude-desktop).
 
 ## Usage Examples
 
