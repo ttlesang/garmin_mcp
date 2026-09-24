@@ -205,10 +205,9 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         print("SUCCESS: You can now use the Garmin MCP server!")
         print("=" * 60)
         print("\nNext steps:")
-        print("1. Add the server to your MCP client (e.g., Claude Desktop)")
-        print("2. No need to include GARMIN_EMAIL or GARMIN_PASSWORD in config")
-        print("3. The server will use your saved OAuth tokens")
-        print("\nTokens are valid for approximately 6 months.")
+        print("- Local client (e.g. Claude Desktop): add the server, no credentials needed in its config.")
+        print("- Remote server (Railway, Docker): run 'garmin-mcp-auth --export' and set the")
+        print("  printed value as GARMIN_TOKENS_JSON_BASE64 on the server.")
 
         return True
 
@@ -302,6 +301,32 @@ def verify_tokens(token_path: str) -> bool:
         return False
 
 
+def export_tokens(token_path: str) -> bool:
+    """Print the saved tokens as the GARMIN_TOKENS_JSON_BASE64 value.
+
+    This is what a remote deployment (Railway, Docker) needs: the login and
+    MFA happen here, on the user's own machine, and only the resulting tokens
+    are copied to the server.
+    """
+    token_json_path = os.path.join(os.path.expanduser(token_path), "garmin_tokens.json")
+    if not os.path.isfile(token_json_path):
+        print(f"✗ No tokens found at: {token_json_path}", file=sys.stderr)
+        print("  Run 'garmin-mcp-auth' first to log in.", file=sys.stderr)
+        return False
+
+    with open(token_json_path, "r", encoding="utf-8") as f:
+        token_b64 = base64.b64encode(f.read().encode("utf-8")).decode("ascii")
+
+    # Instructions on stderr so stdout is exactly the value (safe to pipe).
+    print(
+        "\nValue for the GARMIN_TOKENS_JSON_BASE64 variable of your server.\n"
+        "It grants access to your Garmin account: treat it like a password.\n",
+        file=sys.stderr,
+    )
+    print(token_b64)
+    return True
+
+
 def main():
     """Main entry point for the authentication CLI tool."""
     parser = argparse.ArgumentParser(
@@ -323,7 +348,16 @@ Examples:
 
   # Use custom token location
   garmin-mcp-auth --token-path ~/.garmin_tokens
+
+  # Print the GARMIN_TOKENS_JSON_BASE64 value for a remote server (Railway, Docker)
+  garmin-mcp-auth --export
         """
+    )
+
+    parser.add_argument(
+        "--export",
+        action="store_true",
+        help="Print the saved tokens as the GARMIN_TOKENS_JSON_BASE64 value for a remote server",
     )
 
     parser.add_argument(
@@ -363,6 +397,9 @@ Examples:
         is_cn = True
     else:
         is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
+
+    if args.export:
+        sys.exit(0 if export_tokens(token_path) else 1)
 
     print("\n" + "=" * 60)
     print("Garmin MCP Pre-Authentication Tool")

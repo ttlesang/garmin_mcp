@@ -1,0 +1,14 @@
+# Railway deployment settings (read automatically when the repo is deployed).
+# Step-by-step guide: DEPLOIEMENT.md
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+# MCP sessions and the login lockout live in memory: run exactly one replica.
+numReplicas = 1
