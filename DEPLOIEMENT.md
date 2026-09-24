@@ -227,6 +227,7 @@ Quand le projet d'origine reçoit des améliorations :
 | Les outils répondent `Garmin authentication expired` | Les tokens Garmin ne sont plus valides (changement de mot de passe Garmin, longue inactivité…). Refaites l'étape 2 (ajoutez `--force-reauth` à la commande de connexion), puis collez la nouvelle clé dans `GARMIN_TOKENS_JSON_BASE64` : une nouvelle valeur remplace automatiquement les anciens tokens. |
 | `Too many requests` / `429` à l'étape 2 | Garmin limite les tentatives : attendez 15 à 30 minutes. |
 | `uvx` : commande introuvable | Fermez et rouvrez le terminal après l'installation de `uv` (étape 2.1). |
+| Windows, étape 2 : `Failed to build fitparse` … `No such file or directory` | Chemin de fichier trop long pour Windows. Dans PowerShell, tapez `$env:UV_CACHE_DIR="C:\uvcache"` puis relancez la commande dans la même fenêtre. |
 
 Pour voir ce qui se passe : Railway → votre service → **Deployments** → **View logs**.
 
