@@ -1,6 +1,6 @@
 # Déployer votre propre serveur Garmin MCP
 
-Ce guide vous permet de connecter **votre** compte Garmin à Claude (ou ChatGPT), sur **votre propre serveur**. Personne d'autre, y compris la personne qui vous a partagé ce lien, n'a accès à vos données.
+Ce guide vous permet de connecter **votre** compte Garmin à votre assistant IA, via **votre propre serveur**. Personne d'autre, y compris la personne qui vous a partagé ce lien, n'a accès à vos données.
 
 Comptez environ **30 minutes**. Aucune compétence en programmation n'est nécessaire : il suffit de copier-coller quelques commandes.
 
@@ -13,7 +13,7 @@ Comptez environ **30 minutes**. Aucune compétence en programmation n'est néces
 3. [Étape 1 — Copier le projet sur votre GitHub](#étape-1--copier-le-projet-sur-votre-github)
 4. [Étape 2 — Vous connecter à Garmin depuis votre ordinateur](#étape-2--vous-connecter-à-garmin-depuis-votre-ordinateur)
 5. [Étape 3 — Créer le serveur sur Railway](#étape-3--créer-le-serveur-sur-railway)
-6. [Étape 4 — Connecter Claude](#étape-4--connecter-claude)
+6. [Étape 4 — Connecter votre assistant IA](#étape-4--connecter-votre-assistant-ia)
 7. [Sécurité : les bons réflexes](#sécurité--les-bons-réflexes)
 8. [Options](#options)
 9. [Mettre à jour](#mettre-à-jour)
@@ -25,13 +25,13 @@ Comptez environ **30 minutes**. Aucune compétence en programmation n'est néces
 ## 1. Comment ça marche
 
 ```
-Claude ──HTTPS──▶ Votre serveur Railway ──▶ Garmin Connect
-          (protégé par votre mot de passe)    (avec vos tokens Garmin)
+Assistant IA ──HTTPS──▶ Votre serveur Railway ──▶ Garmin Connect
+                (protégé par votre mot de passe)    (avec vos tokens Garmin)
 ```
 
 - **Votre serveur** tourne sur [Railway](https://railway.com), un hébergeur. Il n'est qu'à vous.
 - **Il ne connaît pas votre mot de passe Garmin.** Vous vous connectez à Garmin une seule fois, sur votre ordinateur, et vous ne donnez au serveur que des **tokens** : des clés d'accès que Garmin renouvelle automatiquement.
-- **Un mot de passe de serveur**, que vous choisissez, est demandé chaque fois qu'une application (Claude, ChatGPT…) veut se connecter à votre serveur. Sans lui, personne ne peut lire vos données, même en connaissant l'adresse.
+- **Un mot de passe de serveur**, que vous choisissez, est demandé chaque fois qu'un assistant IA veut se connecter à votre serveur. Sans lui, personne ne peut lire vos données, même en connaissant l'adresse.
 
 > **Pourquoi se connecter à Garmin depuis son ordinateur ?** Garmin bloque les connexions venant des serveurs d'hébergement, et le code de vérification (MFA) ne peut pas être saisi sur un serveur. Faire la connexion chez vous règle les deux problèmes.
 
@@ -43,7 +43,7 @@ Claude ──HTTPS──▶ Votre serveur Railway ──▶ Garmin Connect
 |---|---|
 | Un compte **GitHub** | Gratuit — [github.com/signup](https://github.com/signup) |
 | Un compte **Railway** | [railway.com](https://railway.com) — l'offre *Hobby* coûte environ **5 $/mois**, largement suffisant pour ce serveur |
-| Un compte **Claude** | Qui permet d'ajouter un *connecteur personnalisé* (vérifiez dans *Paramètres → Connecteurs*) |
+| Un **assistant IA** compatible MCP | Qui permet d'ajouter un *serveur MCP distant* par son URL (vérifiez dans ses paramètres : *Connecteurs*, *Intégrations*…) |
 | Votre compte **Garmin Connect** | Email, mot de passe, et votre téléphone/email si la double authentification est activée |
 | Un **ordinateur** | Windows, macOS ou Linux, pour l'étape 2 |
 
@@ -165,18 +165,20 @@ Vous obtenez une adresse du type `https://garmin-mcp-production-xxxx.up.railway.
 
 ---
 
-## Étape 4 — Connecter Claude
+## Étape 4 — Connecter votre assistant IA
 
-1. Sur [claude.ai](https://claude.ai) : **Paramètres → Connecteurs → Ajouter un connecteur personnalisé**.
+Votre assistant doit accepter les **serveurs MCP distants** (connexion par URL, avec authentification OAuth). Selon l'application, l'option s'appelle *Connecteurs*, *Intégrations*, *Outils* ou *Serveurs MCP*, en général dans les paramètres.
+
+1. Dans les paramètres de votre assistant, ajoutez un **connecteur / serveur MCP personnalisé**.
 2. **Nom** : `Garmin` — **URL** : `https://VOTRE-ADRESSE.up.railway.app/sse` (n'oubliez pas le `/sse` à la fin).
-3. Cliquez sur **Connecter**. Une page **« Autoriser l'accès à vos données Garmin »** s'ouvre.
+3. Lancez la connexion. Une page **« Autoriser l'accès à vos données Garmin »** s'ouvre dans le navigateur.
 4. Vérifiez que l'adresse dans la barre du navigateur est bien **la vôtre**, saisissez votre **mot de passe de serveur**, puis **Autoriser**.
 
-Testez : *« Quelles sont mes 3 dernières activités Garmin ? »*
+Testez en demandant à votre assistant : *« Quelles sont mes 3 dernières activités Garmin ? »*
 
-**Autres applications** (ChatGPT…) : si votre offre permet d'ajouter un connecteur MCP personnalisé, utilisez la même URL en `/sse` ; la même page de mot de passe s'affichera.
+Vous pouvez connecter plusieurs assistants au même serveur : chacun passera par la même page de mot de passe.
 
-> Les menus de Claude, Railway et GitHub évoluent : si un intitulé diffère légèrement, cherchez l'option la plus proche.
+> Les menus de Railway, GitHub et des assistants évoluent : si un intitulé diffère légèrement, cherchez l'option la plus proche.
 
 ---
 
@@ -185,7 +187,7 @@ Testez : *« Quelles sont mes 3 dernières activités Garmin ? »*
 - **Un serveur = un compte Garmin.** Ne partagez jamais votre mot de passe de serveur : quiconque l'a peut lire (et modifier) **vos** données Garmin. Si un proche veut le service, il suit ce guide pour avoir son propre serveur.
 - **Ne saisissez le mot de passe de serveur que sur la page de votre propre adresse** (`...up.railway.app` que vous avez générée).
 - **Après 5 mots de passe faux**, la page se bloque 15 minutes : c'est une protection contre les attaques, pas une panne.
-- **Si vous pensez que le mot de passe de serveur a fuité** : changez `GARMIN_MCP_ADMIN_PASSWORD` dans Railway. Les applications déjà connectées le restent jusqu'à expiration de leur accès ; pour les déconnecter immédiatement, supprimez le volume, recréez-le avec le même chemin `/data` et redéployez (les tokens Garmin sont recréés depuis `GARMIN_TOKENS_JSON_BASE64`), puis reconnectez Claude.
+- **Si vous pensez que le mot de passe de serveur a fuité** : changez `GARMIN_MCP_ADMIN_PASSWORD` dans Railway. Les applications déjà connectées le restent jusqu'à expiration de leur accès ; pour les déconnecter immédiatement, supprimez le volume, recréez-le avec le même chemin `/data` et redéployez (les tokens Garmin sont recréés depuis `GARMIN_TOKENS_JSON_BASE64`), puis reconnectez votre assistant.
 - **Si la clé `GARMIN_TOKENS_JSON_BASE64` a fuité** : changez votre mot de passe Garmin sur connect.garmin.com par précaution, refaites l'étape 2 avec `--force-reauth` et mettez la nouvelle clé dans la variable.
 - **Pour limiter les risques**, activez le mode lecture seule (ci-dessous).
 
@@ -221,7 +223,7 @@ Quand le projet d'origine reçoit des améliorations :
 | Logs : `WARNING: no Railway volume attached` | Le volume n'est pas branché (étape 3.4). |
 | Logs : `ERROR: no Garmin login configured` | `GARMIN_TOKENS_JSON_BASE64` manquante ou vide (étapes 2.3 et 3.3). |
 | `/health` ne répond pas | Vérifiez l'adresse (étape 3.5), le port **3000**, et que le déploiement est **Active**. |
-| Claude affiche une erreur à la connexion | Vérifiez que l'URL se termine par **`/sse`**, et que `https://…/health` répond. |
+| L'assistant affiche une erreur à la connexion | Vérifiez que l'URL se termine par **`/sse`**, et que `https://…/health` répond. |
 | « Mot de passe incorrect » | C'est le **mot de passe de serveur** (variable Railway), pas celui de Garmin. |
 | « Trop de tentatives échouées » | Attendez 15 minutes. |
 | Les outils répondent `Garmin authentication expired` | Les tokens Garmin ne sont plus valides (changement de mot de passe Garmin, longue inactivité…). Refaites l'étape 2 (ajoutez `--force-reauth` à la commande de connexion), puis collez la nouvelle clé dans `GARMIN_TOKENS_JSON_BASE64` : une nouvelle valeur remplace automatiquement les anciens tokens. |
@@ -236,6 +238,6 @@ Pour voir ce qui se passe : Railway → votre service → **Deployments** → **
 ## Limites à connaître
 
 - **API non officielle.** Ce projet utilise la bibliothèque communautaire [python-garminconnect](https://github.com/cyberjunky/python-garminconnect), qui imite l'application Garmin. Garmin peut la casser du jour au lendemain ; un correctif arrive alors en général via une mise à jour (voir *Mettre à jour*).
-- **Données de santé.** Votre serveur transmet vos données (sommeil, fréquence cardiaque, poids…) à l'IA que vous connectez. Ne connectez que des applications de confiance.
+- **Données de santé.** Votre serveur transmet vos données (sommeil, fréquence cardiaque, poids…) à l'assistant IA que vous connectez, et donc à son éditeur. Ne connectez que des applications de confiance.
 - **Un seul serveur à la fois.** Ne passez pas le nombre de réplicas au-dessus de 1 sur Railway (déjà réglé dans `railway.toml`).
 - **Coût.** Railway facture à l'usage ; ce serveur consomme peu, mais surveillez votre tableau de bord Railway le premier mois.
