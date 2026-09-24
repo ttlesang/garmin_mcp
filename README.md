@@ -2,6 +2,10 @@
 
 # Garmin MCP Server
 
+> **🇫🇷 Vous voulez votre propre serveur Garmin pour Claude ?** Suivez le guide pas à pas **[DEPLOIEMENT.md](DEPLOIEMENT.md)** : fork, connexion Garmin, déploiement sur Railway et connexion à Claude en ~30 minutes, sans programmer.
+>
+> **🇬🇧 Deploying your own remote server?** See [Remote deployment with OAuth](#remote-deployment-with-oauth-garmin-mcp-http) (Railway is supported out of the box via `railway.toml`).
+
 This Model Context Protocol (MCP) server connects to Garmin Connect and exposes your fitness and health data to Claude and other MCP-compatible clients.
 
 Garmin's API is accessed via the awesome [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library.
@@ -435,7 +439,7 @@ Then add `https://<your-domain>/sse` as a custom connector in Claude.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BASE_URL` | `http://127.0.0.1:$PORT` | Public URL of the server (OAuth issuer and resource) |
+| `BASE_URL` | `https://$RAILWAY_PUBLIC_DOMAIN` on Railway, else `http://127.0.0.1:$PORT` | Public URL of the server (OAuth issuer and resource) |
 | `GARMIN_MCP_ADMIN_PASSWORD` | — (required, ≥ 12 chars) | Password asked on the authorization page |
 | `GARMIN_TOKENS_JSON_BASE64` | — | Base64 of `garmin_tokens.json`; seeds the token volume once, refreshed tokens are kept |
 | `PORT` / `GARMIN_MCP_HOST` | `3000` / `0.0.0.0` | Listen address |
@@ -444,9 +448,12 @@ Then add `https://<your-domain>/sse` as a custom connector in Claude.
 | `GARMIN_MCP_REQUEST_TIMEOUT` | `300` | Max seconds for one tool call |
 | `GARMIN_MCP_ACCESS_TOKEN_TTL` / `GARMIN_MCP_REFRESH_TOKEN_TTL` | `3600` / `2592000` | OAuth token lifetimes |
 | `GARMIN_MCP_MAX_CLIENTS` | `50` | Registered OAuth clients kept (oldest evicted) |
+| `GARMIN_MCP_READ_ONLY` | `false` | Only register tools that read data (`get_*`, `count_activities`, `download_workout`) |
 | `GARMIN_MCP_DISABLE_LOCAL_FILE_TOOLS` | `true` in this mode | Hides `download_activity_file`, `set_fit_download_dir` and `upload_course`, which would read/write the server's disk |
 
-OAuth tokens and client secrets are stored hashed (SHA-256) next to the Garmin tokens on the volume.
+OAuth tokens and client secrets are stored hashed (SHA-256) next to the Garmin tokens on the volume. On Railway, the token directory defaults to the attached volume (`RAILWAY_VOLUME_MOUNT_PATH`).
+
+To produce `GARMIN_TOKENS_JSON_BASE64`, log in on your own machine with `garmin-mcp-auth`, then run `garmin-mcp-auth --export`.
 
 ### Garmin Connect China (garmin.cn)
 

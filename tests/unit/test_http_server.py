@@ -840,3 +840,31 @@ def test_legacy_env_value_longer_than_a_path_is_decoded():
     env = {"GARMINTOKENS_BASE64": base64.b64encode(token_json.encode()).decode()}
     decoded, _ = _extract_token_json_from_env(env)
     assert decoded == token_json
+
+
+# --- Hosting platform defaults ----------------------------------------------
+
+from garmin_mcp.http_server import _apply_platform_defaults
+
+
+def test_railway_defaults_fill_base_url_and_token_dir():
+    env = {"RAILWAY_PUBLIC_DOMAIN": "garmin-abc.up.railway.app", "RAILWAY_VOLUME_MOUNT_PATH": "/data"}
+    assert _apply_platform_defaults(env, 3000) == "https://garmin-abc.up.railway.app"
+    assert env["GARMINTOKENS"] == "/data"
+
+
+def test_explicit_settings_win_over_platform_defaults():
+    env = {
+        "BASE_URL": "https://mcp.example.com",
+        "GARMINTOKENS": "/custom",
+        "RAILWAY_PUBLIC_DOMAIN": "garmin-abc.up.railway.app",
+        "RAILWAY_VOLUME_MOUNT_PATH": "/data",
+    }
+    assert _apply_platform_defaults(env, 3000) == "https://mcp.example.com"
+    assert env["GARMINTOKENS"] == "/custom"
+
+
+def test_local_default_base_url():
+    env = {}
+    assert _apply_platform_defaults(env, 4000) == "http://127.0.0.1:4000"
+    assert "GARMINTOKENS" not in env

@@ -483,3 +483,21 @@ class TestSecureTokenDir:
         with tempfile.TemporaryDirectory() as tmpdir:
             _secure_token_dir(tmpdir)
             assert oct(os.stat(tmpdir).st_mode)[-3:] == "700"
+
+
+class TestExportTokens:
+    def test_prints_base64_of_token_file(self, tmp_path, capsys):
+        from garmin_mcp.auth_cli import export_tokens
+
+        content = '{"di_token": "abc"}'
+        (tmp_path / "garmin_tokens.json").write_text(content, encoding="utf-8")
+
+        assert export_tokens(str(tmp_path)) is True
+        out = capsys.readouterr().out.strip()
+        assert base64.b64decode(out).decode("utf-8") == content
+
+    def test_missing_tokens_fails(self, tmp_path, capsys):
+        from garmin_mcp.auth_cli import export_tokens
+
+        assert export_tokens(str(tmp_path)) is False
+        assert capsys.readouterr().out == ""

@@ -17,7 +17,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Mapping
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, MutableMapping
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 import uvicorn
@@ -1538,10 +1538,35 @@ def create_app(
     return app
 
 
+def _apply_platform_defaults(env: MutableMapping[str, str], port: int) -> str:
+    """Fill deployment settings a hosting platform already knows; return BASE_URL.
+
+    On Railway, the public domain and the volume mount path are exposed as
+    RAILWAY_PUBLIC_DOMAIN and RAILWAY_VOLUME_MOUNT_PATH, so a fork deploys
+    without setting BASE_URL or GARMINTOKENS by hand. Explicit values win.
+    GARMINTOKENS is written back to ``env`` so session subprocesses inherit it.
+    """
+    volume_path = env.get("RAILWAY_VOLUME_MOUNT_PATH")
+    if not env.get("GARMINTOKENS") and volume_path:
+        env["GARMINTOKENS"] = volume_path
+
+    if env.get("BASE_URL"):
+        return env["BASE_URL"]
+    if env.get("RAILWAY_PUBLIC_DOMAIN"):
+        return f"https://{env['RAILWAY_PUBLIC_DOMAIN']}"
+    return f"http://127.0.0.1:{port}"
+
+
 def main() -> None:
     port = int(os.getenv("PORT", "3000"))
     host = os.getenv("GARMIN_MCP_HOST", "0.0.0.0")
-    base_url = os.getenv("BASE_URL", f"http://127.0.0.1:{port}")
+    base_url = _apply_platform_defaults(os.environ, port)
+    if os.getenv("RAILWAY_ENVIRONMENT_NAME") and not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
+        print(
+            "WARNING: no Railway volume attached. Garmin tokens and connected clients "
+            "are lost on every redeploy; attach a volume to this service.",
+            file=sys.stderr,
+        )
     admin_password = os.getenv(ADMIN_PASSWORD_ENV, "")
     if len(admin_password) < MIN_ADMIN_PASSWORD_LENGTH:
         print(
@@ -1563,6 +1588,15 @@ def main() -> None:
             "No pre-generated Garmin token secret detected; runtime credential login remains enabled and may hit Garmin 429 limits.",
             file=sys.stderr,
         )
+    else:
+        token_dir = Path(os.path.expanduser(os.getenv("GARMINTOKENS") or "~/.garminconnect"))
+        if not (token_dir / "garmin_tokens.json").exists():
+            print(
+                f"ERROR: no Garmin login configured. Set {TOKEN_JSON_SECRET_ENV} "
+                "(output of `garmin-mcp-auth --export`); every MCP session will fail until then.",
+                file=sys.stderr,
+            )
+    print(f"Public URL: {base_url}  (MCP endpoint: {base_url}/sse)", file=sys.stderr)
     app = create_app(base_url=base_url, admin_password=admin_password)
     # proxy_headers lets uvicorn trust X-Forwarded-* from the local reverse proxy.
     uvicorn.run(app, host=host, port=port, proxy_headers=True)

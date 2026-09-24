@@ -110,6 +110,17 @@ local_file_tools_disabled = os.getenv(
     "GARMIN_MCP_DISABLE_LOCAL_FILE_TOOLS", "false"
 ).lower() in ("true", "1", "yes")
 
+# Read-only mode: register only tools that cannot change anything on the
+# Garmin account. An allowlist (get_* plus known readers) rather than a list of
+# writers, so a newly added write tool is blocked by default.
+READ_ONLY_EXTRA_TOOLS = {"count_activities", "download_workout"}
+read_only_mode = os.getenv("GARMIN_MCP_READ_ONLY", "false").lower() in ("true", "1", "yes")
+
+
+def is_read_only_tool(name):
+    name = name.lower()
+    return name.startswith("get_") or name in READ_ONLY_EXTRA_TOOLS
+
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 
@@ -177,16 +188,19 @@ class _ToolFilter:
     attribute access (``run``, ``resource``, ...) passes through to the app.
     """
 
-    def __init__(self, app, enabled, disabled, blocked=frozenset()):
+    def __init__(self, app, enabled, disabled, blocked=frozenset(), read_only=False):
         self._app = app
         self._enabled = enabled
         self._disabled = disabled
         self._blocked = blocked  # never registered, even if allowlisted
+        self._read_only = read_only
         self._seen = set()  # tool names encountered, for typo detection
 
     def _allowed(self, name):
         name = name.lower()
         if name in self._blocked:
+            return False
+        if self._read_only and not is_read_only_tool(name):
             return False
         if self._enabled:
             return name in self._enabled
@@ -394,7 +408,10 @@ def main():
         enabled_tools,
         disabled_tools,
         blocked=LOCAL_FILE_TOOLS if local_file_tools_disabled else frozenset(),
+        read_only=read_only_mode,
     )
+    if read_only_mode:
+        print("Read-only mode: tools that modify Garmin data are disabled.", file=sys.stderr)
     if local_file_tools_disabled:
         print(
             f"Local file tools disabled: {', '.join(sorted(LOCAL_FILE_TOOLS))}.",

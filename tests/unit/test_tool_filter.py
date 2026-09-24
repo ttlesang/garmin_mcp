@@ -1,6 +1,6 @@
 """Unit tests for the env-var tool filter (_ToolFilter)."""
 
-from garmin_mcp import LOCAL_FILE_TOOLS, _ToolFilter
+from garmin_mcp import LOCAL_FILE_TOOLS, _ToolFilter, is_read_only_tool
 
 
 class FakeApp:
@@ -102,3 +102,20 @@ def test_blocked_tools_win_over_allowlist():
     assert app.registered == ["get_a"]
     # Blocked tools exist, so they must not be reported as filter typos.
     assert filt.unknown_filter_names() == []
+
+
+def test_read_only_mode_keeps_only_readers():
+    app = FakeApp()
+    filt = _ToolFilter(app, set(), set(), read_only=True)
+    _register(filt, [
+        "get_activities", "count_activities", "download_workout",
+        "delete_workouts", "upload_workout", "set_activity_name",
+        "log_food", "request_reload", "upsert_and_log",
+    ])
+    assert app.registered == ["get_activities", "count_activities", "download_workout"]
+
+
+def test_read_only_classification():
+    assert is_read_only_tool("GET_SLEEP_DATA")
+    assert not is_read_only_tool("schedule_week")
+    assert not is_read_only_tool("remove_gear_from_activity")
