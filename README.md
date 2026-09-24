@@ -1,8 +1,6 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/taxuspt-garmin-mcp-badge.png)](https://mseep.ai/app/taxuspt-garmin-mcp)
-
 # Garmin MCP Server
 
-> **🇫🇷 Vous voulez votre propre serveur Garmin pour Claude ?** Suivez le guide pas à pas **[DEPLOIEMENT.md](DEPLOIEMENT.md)** : fork, connexion Garmin, déploiement sur Railway et connexion à Claude en ~30 minutes, sans programmer.
+> **🇫🇷 Vous voulez votre propre serveur Garmin pour votre assistant IA ?** Suivez le guide pas à pas **[DEPLOIEMENT.md](DEPLOIEMENT.md)** : fork, connexion Garmin, déploiement sur Railway et connexion de votre assistant en ~30 minutes, sans programmer.
 >
 > **🇬🇧 Deploying your own remote server?** See [Remote deployment with OAuth](#remote-deployment-with-oauth-garmin-mcp-http) (Railway is supported out of the box via `railway.toml`).
 
